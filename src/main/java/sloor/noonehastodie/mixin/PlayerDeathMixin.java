@@ -25,6 +25,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 // TODO: Make sure this works with the Grab Mod. I think a good solution would be to check if the player is mounted to something for the death check so players dont die while being held
 // TODO: Change logic so that when players get knocked their hearts get set to full and deplete over a 7 second period and you die when the hearts run out, if you're being revived the hearts stop depleting and once you're revived you keep that amount of hearts. Keep an option to switch to the Legacy Mode or the new mode in the config.
 // TODO: Make sure vanilla death messages still work properly.
+// TODO: Medkit or bandage item that speeds up reviive time and or makes it so the player is always revied at full health.
+// TODO: If player is in a party and has the OPAC mod then only notify party members
 
 // 1. Tell Fabric this Mixin modifies the PlayerEntity class
 @Mixin(PlayerEntity.class)
