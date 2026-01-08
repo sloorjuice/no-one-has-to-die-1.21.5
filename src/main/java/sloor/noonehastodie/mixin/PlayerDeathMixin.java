@@ -1,18 +1,45 @@
 package sloor.noonehastodie.mixin;
 
 import net.minecraft.entity.damage.DamageSource;
+import net.minecraft.entity.data.TrackedDataHandlerRegistry;
+import net.minecraft.entity.effect.StatusEffectInstance;
+import net.minecraft.entity.effect.StatusEffects;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.Text;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Overwrite;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+import net.minecraft.entity.EntityPose;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+
+// TODO: Add a config. Time for a player to die after being knocked, time it takes to revive a player, etc.
+// TODO: Highlight nearby players when you are knocked.
+// TODO: Let the player "Let Go" while downed by holding shift
+// TODO: Make sure this works with the Grab Mod. I think a good solution would be to check if the player is mounted to something for the death check so players dont die while being held
+// TODO: Change logic so that when players get knocked their hearts get set to full and depleat over a 7 second period and you die when the hearts run out, if youre being revived the hearts stop depleating and once youre revived you keep that amount of hearts. Keep an option to switch to the Legacy Mode or the new mode in the config.
 
 // 1. Tell Fabric this Mixin modifies the PlayerEntity class
 @Mixin(PlayerEntity.class)
 public abstract class PlayerDeathMixin {
+
+    // ADD THIS LINE HERE:
+    @Unique
+    private int reviveTicks = 0;
+
+    @Unique
+    private int bleedOutTicks = 0;
+
+    @Unique
+    private static final net.minecraft.entity.data.TrackedData<Boolean> KNOCKED_STATE =
+            net.minecraft.entity.data.DataTracker.registerData(PlayerEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
+
+    private static final net.minecraft.entity.data.TrackedData<Boolean> REVIVING_STATE =
+            net.minecraft.entity.data.DataTracker.registerData(PlayerEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
 
     // 2. Inject into the "damage" method
     // "HEAD" means we run this code right at the start of the method, before Minecraft does its math
@@ -22,6 +49,8 @@ public abstract class PlayerDeathMixin {
         // Cast 'this' to the player object so we can check health
         PlayerEntity player = (PlayerEntity) (Object) this;
 
+        if (player.getDataTracker().get(KNOCKED_STATE)) return;
+
         // We only care about this happening on the server side
         if (player instanceof ServerPlayerEntity) {
 
@@ -29,8 +58,11 @@ public abstract class PlayerDeathMixin {
             float currentHealth = player.getHealth();
 
             // If the incoming damage is greater than or equal to current health...
-            if (amount > currentHealth) {
+            if (amount >= currentHealth) {
 
+                player.getDataTracker().set(KNOCKED_STATE, true);
+                this.reviveTicks = 0;
+                this.bleedOutTicks = 0;
                 // Prevent Death:
 
                 // A. cancel the damage event so Minecraft doesn't kill the player
@@ -41,11 +73,91 @@ public abstract class PlayerDeathMixin {
 
                 // C. Visual feedback (for testing)
                 player.sendMessage(Text.of("§cYou are KNOCKED! Wait for help!"), true);
+                player.addStatusEffect(new StatusEffectInstance(StatusEffects.SLOWNESS, 980, 5, false, false, true));
 
-                // TODO: Add logic here later to start your 7-second timer
-                // TODO: Add logic here to apply Slowness/Crawling
             }
         }
     }
 
+    @Inject(method="initDataTracker", at = @At("TAIL"))
+    protected void initDataTracker(net.minecraft.entity.data.DataTracker.Builder builder, CallbackInfo ci) {
+        builder.add(KNOCKED_STATE, false);
+        builder.add(REVIVING_STATE, false);
+    }
+
+
+    // We need a way to stop being knocked after 7 seconds
+    @Inject(method = "tick", at = @At("HEAD"))
+    private void handleKnockedTick(CallbackInfo ci) {
+        PlayerEntity player = (PlayerEntity) (Object) this;
+
+        boolean isActuallyKnocked = player.getDataTracker().get(KNOCKED_STATE);
+        if (isActuallyKnocked) {
+            // 1. FORCE THE POSE
+            // We do this every tick so nothing else can stand the player up
+            player.setPose(EntityPose.SWIMMING);
+
+            if (!player.getWorld().isClient()) {
+                // 3. Search for Rescuers
+                java.util.List<PlayerEntity> nearbyPlayers = player.getWorld().getEntitiesByClass(
+                        PlayerEntity.class,
+                        player.getBoundingBox().expand(3.0),
+                        p -> p != player && p.isSneaking()
+                );
+
+                if (!nearbyPlayers.isEmpty()) {
+                    this.reviveTicks++;
+                    player.getDataTracker().set(REVIVING_STATE, true);
+
+                    // Calculate time
+                    int secondsPassed = this.reviveTicks / 20;
+                    Text progressMessage = Text.of("§eReviving... " + secondsPassed + "s / 7s");
+
+                    // Send message to the downed player
+                    player.sendMessage(progressMessage, true);
+
+                    // Send message to EVERY helper nearby
+                    for (PlayerEntity helper : nearbyPlayers) {
+                        helper.sendMessage(progressMessage, true);
+                    }
+
+                    if (reviveTicks >= 140) { // 7 seconds
+                        player.getDataTracker().set(KNOCKED_STATE, false);
+                        player.getDataTracker().set(REVIVING_STATE, false);
+                        this.reviveTicks = 0;
+                        this.bleedOutTicks = 0;
+                        player.setHealth(10.0f); // 5 hearts
+                        player.clearStatusEffects();
+                        player.sendMessage(Text.of("§aYou were revived!"), true);
+
+                        for (PlayerEntity helper : nearbyPlayers) {
+                            helper.sendMessage(Text.of("§aPlayer Revived!"), true);
+                        }
+                    }
+                } else {
+                    // No rescuers found: reset revive progress and turn off reviving state
+                    if (player.getDataTracker().get(REVIVING_STATE)) {
+                        player.getDataTracker().set(REVIVING_STATE, false);
+                        player.sendMessage(Text.of("§cRevive interrupted!"), true);
+                    }
+
+                    this.reviveTicks = 0;
+                    this.bleedOutTicks++;
+
+                    int maxBleedTicks = 140; // 7 seconds
+                    int secondsLeft = (maxBleedTicks - this.bleedOutTicks) / 20;
+
+                    if (this.bleedOutTicks >= maxBleedTicks) {
+                        player.getDataTracker().set(KNOCKED_STATE, false);
+                        player.getDataTracker().set(REVIVING_STATE, false);
+                        player.setHealth(0.0f);
+                        player.onDeath(player.getDamageSources().generic());
+                    } else {
+                        String color = secondsLeft > 3 ? "§a" : "§c";
+                        player.sendMessage(Text.of("§7Bleeding out: " + color + secondsLeft + "s"), true);
+                    }
+                }
+            }
+        }
+    }
 }
