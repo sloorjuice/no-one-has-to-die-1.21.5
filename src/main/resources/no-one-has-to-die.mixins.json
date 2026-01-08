@@ -1,0 +1,15 @@
+{
+	"required": true,
+	"package": "sloor.noonehastodie.mixin",
+	"compatibilityLevel": "JAVA_21",
+	"mixins": [
+		"ExampleMixin",
+		"PlayerDeathMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	},
+	"overwrites": {
+		"requireAnnotations": true
+	}
+}
