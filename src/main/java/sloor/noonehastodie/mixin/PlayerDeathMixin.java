@@ -5,11 +5,13 @@ import net.minecraft.entity.data.TrackedDataHandlerRegistry;
 import net.minecraft.entity.effect.StatusEffectInstance;
 import net.minecraft.entity.effect.StatusEffects;
 import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.Text;
+import net.minecraft.util.Formatting;
+import net.minecraft.util.math.BlockPos;
 import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.Overwrite;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -21,7 +23,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 // TODO: Highlight nearby players when you are knocked.
 // TODO: Let the player "Let Go" while downed by holding shift
 // TODO: Make sure this works with the Grab Mod. I think a good solution would be to check if the player is mounted to something for the death check so players dont die while being held
-// TODO: Change logic so that when players get knocked their hearts get set to full and depleat over a 7 second period and you die when the hearts run out, if youre being revived the hearts stop depleating and once youre revived you keep that amount of hearts. Keep an option to switch to the Legacy Mode or the new mode in the config.
+// TODO: Change logic so that when players get knocked their hearts get set to full and deplete over a 7 second period and you die when the hearts run out, if you're being revived the hearts stop depleting and once you're revived you keep that amount of hearts. Keep an option to switch to the Legacy Mode or the new mode in the config.
+// TODO: Make sure vanilla death messages still work properly.
 
 // 1. Tell Fabric this Mixin modifies the PlayerEntity class
 @Mixin(PlayerEntity.class)
@@ -38,6 +41,7 @@ public abstract class PlayerDeathMixin {
     private static final net.minecraft.entity.data.TrackedData<Boolean> KNOCKED_STATE =
             net.minecraft.entity.data.DataTracker.registerData(PlayerEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
 
+    @Unique
     private static final net.minecraft.entity.data.TrackedData<Boolean> REVIVING_STATE =
             net.minecraft.entity.data.DataTracker.registerData(PlayerEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
 
@@ -68,13 +72,28 @@ public abstract class PlayerDeathMixin {
                 // A. cancel the damage event so Minecraft doesn't kill the player
                 cir.setReturnValue(false);
 
-                //B. Set health to a safe number (e.g., half a heart
-                player.setHealth(1.0f);
+                //B. Set health to a safe number
+                player.setHealth(10.0f); // 5 hearts
 
                 // C. Visual feedback (for testing)
                 player.sendMessage(Text.of("§cYou are KNOCKED! Wait for help!"), true);
                 player.addStatusEffect(new StatusEffectInstance(StatusEffects.SLOWNESS, 980, 5, false, false, true));
 
+                BlockPos knockedPos = player.getBlockPos();
+                Text message = Text.literal("")
+                        .append(player.getDisplayName())
+                        .append(Text.literal(" has been knocked at ["
+                                + knockedPos.getX() + ", "
+                                + knockedPos.getY() + ", "
+                                + knockedPos.getZ() + "]"))
+                        .formatted(Formatting.WHITE);
+
+                if (player instanceof ServerPlayerEntity serverPlayer) {
+                    MinecraftServer server = serverPlayer.getServer();
+                    if (server != null) {
+                        server.getPlayerManager().broadcast(message, false);
+                    }
+                }
             }
         }
     }
@@ -113,10 +132,10 @@ public abstract class PlayerDeathMixin {
                     int secondsPassed = this.reviveTicks / 20;
                     Text progressMessage = Text.of("§eReviving... " + secondsPassed + "s / 7s");
 
-                    // Send message to the downed player
+                    // Send a message to the downed player
                     player.sendMessage(progressMessage, true);
 
-                    // Send message to EVERY helper nearby
+                    // Send a message to EVERY helper nearby
                     for (PlayerEntity helper : nearbyPlayers) {
                         helper.sendMessage(progressMessage, true);
                     }
@@ -135,7 +154,7 @@ public abstract class PlayerDeathMixin {
                         }
                     }
                 } else {
-                    // No rescuers found: reset revive progress and turn off reviving state
+                    // No rescuers found: reset revive progress and turn off the reviving state
                     if (player.getDataTracker().get(REVIVING_STATE)) {
                         player.getDataTracker().set(REVIVING_STATE, false);
                         player.sendMessage(Text.of("§cRevive interrupted!"), true);
