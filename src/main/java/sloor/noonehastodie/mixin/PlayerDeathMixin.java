@@ -19,9 +19,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import net.minecraft.entity.EntityPose;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-// TODO: Add a config. Time for a player to die after being knocked, time it takes to revive a player, etc.
+// TODO: Add a config. Time for a player to die after being knocked, time it takes to revive a player, etc. Show Knocked Messages, Show Knocked Location
 // TODO: Highlight nearby players when you are knocked.
-// TODO: Let the player "Let Go" while downed by holding shift
 // TODO: Make sure this works with the Grab Mod. I think a good solution would be to check if the player is mounted to something for the death check so players dont die while being held
 // TODO: Change logic so that when players get knocked their hearts get set to full and deplete over a 7 second period and you die when the hearts run out, if you're being revived the hearts stop depleting and once you're revived you keep that amount of hearts. Keep an option to switch to the Legacy Mode or the new mode in the config.
 // TODO: Make sure vanilla death messages still work properly.
@@ -38,6 +37,12 @@ public abstract class PlayerDeathMixin {
 
     @Unique
     private int bleedOutTicks = 0;
+
+    @Unique
+    private int letGoTicks = 0;
+
+    @Unique
+    private boolean isLettingGo = false;
 
     @Unique
     private static final net.minecraft.entity.data.TrackedData<Boolean> KNOCKED_STATE =
@@ -106,6 +111,15 @@ public abstract class PlayerDeathMixin {
         builder.add(REVIVING_STATE, false);
     }
 
+    @Inject(method = "updatePose", at = @At("HEAD"), cancellable = true)
+    private void forceKnockedPose(CallbackInfo ci) {
+        PlayerEntity player = (PlayerEntity) (Object) this;
+
+        if (player.getDataTracker().get(KNOCKED_STATE) || player.getDataTracker().get(REVIVING_STATE)) {
+            player.setPose(EntityPose.SWIMMING);
+            ci.cancel();
+        }
+    }
 
     // We need a way to stop being knocked after 7 seconds
     @Inject(method = "tick", at = @At("HEAD"))
@@ -114,9 +128,6 @@ public abstract class PlayerDeathMixin {
 
         boolean isActuallyKnocked = player.getDataTracker().get(KNOCKED_STATE);
         if (isActuallyKnocked) {
-            // 1. FORCE THE POSE
-            // We do this every tick so nothing else can stand the player up
-            player.setPose(EntityPose.SWIMMING);
 
             if (!player.getWorld().isClient()) {
                 // 3. Search for Rescuers
@@ -155,7 +166,19 @@ public abstract class PlayerDeathMixin {
                             helper.sendMessage(Text.of("§aPlayer Revived!"), true);
                         }
                     }
-                } else {
+                } else if (player.isSneaking()) {
+                    isLettingGo = true;
+                    this.letGoTicks++;
+
+                    player.sendMessage(Text.of("§aLetting Go:"), true);
+
+                    if (letGoTicks >= 20) {
+                        player.getDataTracker().set(KNOCKED_STATE, false);
+                        player.getDataTracker().set(REVIVING_STATE, false);
+                        player.setHealth(0.0f);
+                        player.onDeath(player.getDamageSources().generic());
+                    }
+                } else if (!isLettingGo) {
                     // No rescuers found: reset revive progress and turn off the reviving state
                     if (player.getDataTracker().get(REVIVING_STATE)) {
                         player.getDataTracker().set(REVIVING_STATE, false);
@@ -175,7 +198,11 @@ public abstract class PlayerDeathMixin {
                         player.onDeath(player.getDamageSources().generic());
                     } else {
                         String color = secondsLeft > 3 ? "§a" : "§c";
-                        player.sendMessage(Text.of("§7Bleeding out: " + color + secondsLeft + "s"), true);
+                        player.sendMessage(
+                                Text.of("§7Bleeding out: " + color + secondsLeft + "s §8| §eCrouch to let go"),
+                                true
+                        );
+
                     }
                 }
             }
