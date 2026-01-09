@@ -74,6 +74,8 @@ public abstract class PlayerDeathMixin {
                 player.getDataTracker().set(KNOCKED_STATE, true);
                 this.reviveTicks = 0;
                 this.bleedOutTicks = 0;
+                this.letGoTicks = 0;
+                this.isLettingGo = false;
                 // Prevent Death:
 
                 // A. cancel the damage event so Minecraft doesn't kill the player
@@ -126,6 +128,11 @@ public abstract class PlayerDeathMixin {
     private void handleKnockedTick(CallbackInfo ci) {
         PlayerEntity player = (PlayerEntity) (Object) this;
 
+        if (!player.isSneaking()) {
+            isLettingGo = false;
+            letGoTicks = 0;
+        }
+
         boolean isActuallyKnocked = player.getDataTracker().get(KNOCKED_STATE);
         if (isActuallyKnocked) {
 
@@ -158,6 +165,8 @@ public abstract class PlayerDeathMixin {
                         player.getDataTracker().set(REVIVING_STATE, false);
                         this.reviveTicks = 0;
                         this.bleedOutTicks = 0;
+                        this.letGoTicks = 0;
+                        this.isLettingGo = false;
                         player.setHealth(10.0f); // 5 hearts
                         player.clearStatusEffects();
                         player.sendMessage(Text.of("§aYou were revived!"), true);
@@ -187,6 +196,8 @@ public abstract class PlayerDeathMixin {
 
                     this.reviveTicks = 0;
                     this.bleedOutTicks++;
+                    this.letGoTicks = 0;
+                    this.isLettingGo = false;
 
                     int maxBleedTicks = 140; // 7 seconds
                     int secondsLeft = (maxBleedTicks - this.bleedOutTicks) / 20;
