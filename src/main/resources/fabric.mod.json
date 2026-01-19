@@ -3,16 +3,17 @@
 	"id": "no-one-has-to-die",
 	"version": "${version}",
 	"name": "No One Has to Die",
-	"description": "This is an example description! Tell everyone what your mod is about!",
+	"description": "Adds a complete revive mechanic into Minecraft. Get downed instead of dying for 7 seconds. Revive players by holding crouch near them. Hold a totem to revive yourself instead of dying.",
 	"authors": [
-		"Me!"
+		"sloorjuice"
 	],
 	"contact": {
-		"homepage": "https://fabricmc.net/",
-		"sources": "https://github.com/FabricMC/fabric-example-mod"
+		"homepage": "https://github.com/sloorjuice/no-one-has-to-die-1.21.5",
+		"sources": "https://github.com/sloorjuice/no-one-has-to-die-1.21.5",
+		"issues": "https://github.com/sloorjuice/no-one-has-to-die-1.21.5/issues"
 	},
-	"license": "CC0-1.0",
-	"icon": "assets/no-one-has-to-die/icon.png",
+	"license": "MIT",
+	"icon": "assets/no-one-has-to-die/noonehastodie.png",
 	"environment": "*",
 	"entrypoints": {
 		"main": [
