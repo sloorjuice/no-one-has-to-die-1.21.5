@@ -1,13 +1,17 @@
 package sloor.noonehastodie.mixin;
 
+import net.minecraft.advancement.criterion.Criteria;
 import net.minecraft.entity.damage.DamageSource;
 import net.minecraft.entity.data.TrackedDataHandlerRegistry;
 import net.minecraft.entity.effect.StatusEffectInstance;
 import net.minecraft.entity.effect.StatusEffects;
 import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.item.ItemStack;
+import net.minecraft.item.Items;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.stat.Stats;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
 import net.minecraft.util.math.BlockPos;
@@ -18,6 +22,8 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import net.minecraft.entity.EntityPose;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+
+import java.util.List;
 
 // TODO: Add a config. Time for a player to die after being knocked, time it takes to revive a player, etc. Show Knocked Messages, Show Knocked Location
 // TODO: Highlight nearby players when you are knocked.
@@ -127,96 +133,133 @@ public abstract class PlayerDeathMixin {
     @Inject(method = "tick", at = @At("HEAD"))
     private void handleKnockedTick(CallbackInfo ci) {
         PlayerEntity player = (PlayerEntity) (Object) this;
+        if (!player.getDataTracker().get(KNOCKED_STATE)) return;
 
-        if (!player.isSneaking()) {
-            isLettingGo = false;
-            letGoTicks = 0;
-        }
+        if (!player.getWorld().isClient()) {
+            if (!player.isSneaking()) {
+                isLettingGo = false;
+                letGoTicks = 0;
+            }
 
-        boolean isActuallyKnocked = player.getDataTracker().get(KNOCKED_STATE);
-        if (isActuallyKnocked) {
+            List<PlayerEntity> nearbyPlayers = player.getWorld().getEntitiesByClass(
+                    PlayerEntity.class,
+                    player.getBoundingBox().expand(3.0),
+                    p -> p != player && p.isSneaking()
+            );
 
-            if (!player.getWorld().isClient()) {
-                // 3. Search for Rescuers
-                java.util.List<PlayerEntity> nearbyPlayers = player.getWorld().getEntitiesByClass(
-                        PlayerEntity.class,
-                        player.getBoundingBox().expand(3.0),
-                        p -> p != player && p.isSneaking()
-                );
+            if (!nearbyPlayers.isEmpty()) {
+                // --- REVIVING LOGIC ---
+                this.reviveTicks++;
+                player.getDataTracker().set(REVIVING_STATE, true);
 
-                if (!nearbyPlayers.isEmpty()) {
-                    this.reviveTicks++;
-                    player.getDataTracker().set(REVIVING_STATE, true);
+                // Calculate time
+                int secondsPassed = this.reviveTicks / 20;
+                Text progressMessage = Text.of("§eReviving... " + secondsPassed + "s / 7s");
 
-                    // Calculate time
-                    int secondsPassed = this.reviveTicks / 20;
-                    Text progressMessage = Text.of("§eReviving... " + secondsPassed + "s / 7s");
+                // Send a message to the downed player
+                player.sendMessage(progressMessage, true);
 
-                    // Send a message to the downed player
-                    player.sendMessage(progressMessage, true);
+                // Send a message to EVERY helper nearby
+                for (PlayerEntity helper : nearbyPlayers) {
+                    helper.sendMessage(progressMessage, true);
+                }
 
-                    // Send a message to EVERY helper nearby
+                if (reviveTicks >= 140) { // 7 seconds
+                    resetKnockedState(player);
+                    player.setHealth(10.0f); // 5 hearts
+                    player.clearStatusEffects();
+                    player.sendMessage(Text.of("§aYou were revived!"), true);
+
                     for (PlayerEntity helper : nearbyPlayers) {
-                        helper.sendMessage(progressMessage, true);
+                        helper.sendMessage(Text.of("§aPlayer Revived!"), true);
                     }
+                }
+            } else if (player.isSneaking()) {
+                // --- LETTING GO LOGIC ---
+                isLettingGo = true;
+                this.letGoTicks++;
 
-                    if (reviveTicks >= 140) { // 7 seconds
-                        player.getDataTracker().set(KNOCKED_STATE, false);
-                        player.getDataTracker().set(REVIVING_STATE, false);
-                        this.reviveTicks = 0;
-                        this.bleedOutTicks = 0;
-                        this.letGoTicks = 0;
-                        this.isLettingGo = false;
-                        player.setHealth(10.0f); // 5 hearts
-                        player.clearStatusEffects();
-                        player.sendMessage(Text.of("§aYou were revived!"), true);
+                player.sendMessage(Text.of("§aLetting Go:"), true);
 
-                        for (PlayerEntity helper : nearbyPlayers) {
-                            helper.sendMessage(Text.of("§aPlayer Revived!"), true);
-                        }
-                    }
-                } else if (player.isSneaking()) {
-                    isLettingGo = true;
-                    this.letGoTicks++;
+                if (letGoTicks >= 20) {
+                    handleFinalDeath(player);
+                }
+            } else {
+                // No rescuers found: reset revive progress and turn off the reviving state
+                if (player.getDataTracker().get(REVIVING_STATE)) {
+                    player.getDataTracker().set(REVIVING_STATE, false);
+                    player.sendMessage(Text.of("§cRevive interrupted!"), true);
+                }
+                this.reviveTicks = 0;
+                this.bleedOutTicks++;
+                int maxBleedTicks = 140;
+                int secondsLeft = (maxBleedTicks - this.bleedOutTicks) / 20;
 
-                    player.sendMessage(Text.of("§aLetting Go:"), true);
-
-                    if (letGoTicks >= 20) {
-                        player.getDataTracker().set(KNOCKED_STATE, false);
-                        player.getDataTracker().set(REVIVING_STATE, false);
-                        player.setHealth(0.0f);
-                        player.onDeath(player.getDamageSources().generic());
-                    }
-                } else if (!isLettingGo) {
-                    // No rescuers found: reset revive progress and turn off the reviving state
-                    if (player.getDataTracker().get(REVIVING_STATE)) {
-                        player.getDataTracker().set(REVIVING_STATE, false);
-                        player.sendMessage(Text.of("§cRevive interrupted!"), true);
-                    }
-
-                    this.reviveTicks = 0;
-                    this.bleedOutTicks++;
-                    this.letGoTicks = 0;
-                    this.isLettingGo = false;
-
-                    int maxBleedTicks = 140; // 7 seconds
-                    int secondsLeft = (maxBleedTicks - this.bleedOutTicks) / 20;
-
-                    if (this.bleedOutTicks >= maxBleedTicks) {
-                        player.getDataTracker().set(KNOCKED_STATE, false);
-                        player.getDataTracker().set(REVIVING_STATE, false);
-                        player.setHealth(0.0f);
-                        player.onDeath(player.getDamageSources().generic());
-                    } else {
-                        String color = secondsLeft > 3 ? "§a" : "§c";
-                        player.sendMessage(
-                                Text.of("§7Bleeding out: " + color + secondsLeft + "s §8| §eCrouch to let go"),
-                                true
-                        );
-
-                    }
+                if (this.bleedOutTicks >= maxBleedTicks) {
+                    handleFinalDeath(player);
+                } else {
+                    String color = secondsLeft > 3 ? "§a" : "§c";
+                    player.sendMessage(Text.of("§7Bleeding out: " + color + secondsLeft + "s §8| §eCrouch to let go"), true);
                 }
             }
         }
+    }
+
+    /**
+     * Handles the actual death moment. Manually checks for Totem of Undying.
+     * If a Totem is found, it "pops" it and revives the player.
+     */
+    @Unique
+    private void handleFinalDeath(PlayerEntity player) {
+        ItemStack totemStack = null;
+
+        // Manually check hands for totem (Vanilla behavior)
+        for (net.minecraft.util.Hand hand : net.minecraft.util.Hand.values()) {
+            ItemStack itemStack = player.getStackInHand(hand);
+            if (itemStack.isOf(Items.TOTEM_OF_UNDYING)) {
+                totemStack = itemStack.copy();
+                itemStack.decrement(1); // Consume the totem
+                break;
+            }
+        }
+
+        if (totemStack != null) {
+            // --- REPLICATE VANILLA TOTEM SAVING LOGIC ---
+            if (player instanceof ServerPlayerEntity serverPlayer) {
+                serverPlayer.incrementStat(Stats.USED.getOrCreateStat(Items.TOTEM_OF_UNDYING));
+                Criteria.USED_TOTEM.trigger(serverPlayer, totemStack);
+                // Trigger the 'Totem' status effect (id 35) which handles the screen animation
+                player.getWorld().sendEntityStatus(player, (byte)35);
+            }
+
+            // Restore health and clear effects like a real totem pop
+            player.setHealth(1.0f);
+            player.clearStatusEffects();
+            player.addStatusEffect(new StatusEffectInstance(StatusEffects.REGENERATION, 900, 1));
+            player.addStatusEffect(new StatusEffectInstance(StatusEffects.ABSORPTION, 100, 1));
+            player.addStatusEffect(new StatusEffectInstance(StatusEffects.FIRE_RESISTANCE, 800, 0));
+
+            // Stand the player back up
+            resetKnockedState(player);
+            player.sendMessage(Text.of("§6A Totem of Undying saved you from bleeding out!"), true);
+
+        } else {
+            // No Totem -> Actual Death
+            resetKnockedState(player);
+            player.setHealth(0.0f);
+            player.onDeath(player.getDamageSources().generic());
+        }
+    }
+
+    @Unique
+    private void resetKnockedState(PlayerEntity player) {
+        player.getDataTracker().set(KNOCKED_STATE, false);
+        player.getDataTracker().set(REVIVING_STATE, false);
+        this.reviveTicks = 0;
+        this.bleedOutTicks = 0;
+        this.letGoTicks = 0;
+        this.isLettingGo = false;
+        // Important: Remove the slowness we applied when they were knocked
+        player.removeStatusEffect(StatusEffects.SLOWNESS);
     }
 }
